@@ -1,0 +1,43 @@
+{
+  "name": "ts",
+  "displayName": "ts",
+  "description": "",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.107.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:extension.generateComment"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "extension.generateComment",
+        "title": "Generate Comment with AI"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "lint": "eslint src",
+    "test": "echo \"No tests configured\""
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.110.0",
+    "@types/mocha": "^10.0.10",
+    "@types/assert": "^1.5.11",
+    "eslint": "^9.39.3",
+    "typescript-eslint": "^8.56.1",
+    "mocha": "^11.7.5",
+    "typescript": "^5.9.3",
+    "@vscode/test-web": "^0.0.80",
+    "assert": "^2.1.0",
+    "process": "^0.11.10"
+  }
+}
