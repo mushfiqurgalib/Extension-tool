@@ -29,6 +29,11 @@ export function activate(context: vscode.ExtensionContext) {
 
             try {
                 const result = JSON.parse(stdout);
+                if (result.error) {
+                    vscode.window.showErrorMessage(`Error: ${result.error}`);
+                    return;
+                }
+
                 const comment = result.comment;
                 const workspaceEdit = new vscode.WorkspaceEdit();
                 workspaceEdit.insert(documentUri, insertPosition, comment + "\n");

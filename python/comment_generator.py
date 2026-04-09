@@ -2,6 +2,9 @@ import ast
 import os
 import sys
 import json
+import urllib.request
+import warnings
+warnings.filterwarnings("ignore", message="Failed to load image Python extension")
 import chromadb
 from sentence_transformers import SentenceTransformer
 
@@ -11,6 +14,81 @@ DB_PATH = os.path.join(BASE_DIR, "chroma_db")
 EMBED_MODEL = "all-MiniLM-L6-v2"
 TARGET_FILE = os.path.join(BASE_DIR, "minGPT", "mingpt", "model.py")
 
+
+def load_env_file():
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    if not os.path.exists(env_path):
+        return
+
+    with open(env_path, "r", encoding="utf-8") as env_file:
+        for raw_line in env_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+def get_openai_api_key():
+    load_env_file()
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY environment variable is not set.")
+    return api_key
+
+
+def call_openai(prompt):
+    api_key = get_openai_api_key()
+    request_body = {
+        "model": "gpt-4.1-mini",
+        "input": prompt
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        },
+        method="POST"
+    )
+
+    with urllib.request.urlopen(request) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+
+    return payload["output"][0]["content"][0]["text"]
+
+"""
+Retrieve the source code segment and AST node for a specified function within a given class from a Python source file.
+
+Parameters
+----------
+file_path : str
+    The path to the Python source file to be parsed.
+class_name : str
+    The name of the class containing the target function.
+func_name : str
+    The name of the function whose source code and AST node are to be retrieved.
+
+Returns
+-------
+tuple[str or None, ast.FunctionDef or None]
+    A tuple containing:
+    - The source code segment of the specified function as a string,
+      or None if the class or function is not found.
+    - The corresponding `ast.FunctionDef` node of the function,
+      or None if the function is not found.
+
+Notes
+-----
+This function opens and reads the specified file, parses it into an Abstract Syntax Tree (AST), 
+and traverses the tree to locate the target class and function by their names.
+The source code segment is extracted using `ast.get_source_segment` from the file content.
+"""
 def get_function_source(file_path, class_name, func_name):
     with open(file_path, "r", encoding="utf-8") as f:
         tree = ast.parse(f.read())
@@ -32,16 +110,31 @@ def flatten_ast(node):
 def find_intent(code):
     """
     Phase 3: Internal Context Retrieval.
-    In a production RAG pipeline, this would call a model like GPT-4 or CodeT5
-     to summarize the logical intent of the code block.
+    Summarize the logical intent of the code block while preserving
+    the expected "Intent" and "Logic" structure.
     """
-    # Simulated Phase 3 output
-    return (
-        "Intent: Implement multi-head causal self-attention. "
-        "Logic: Linearly project input to Q, K, V; split into heads; "
-        "compute scaled dot-product attention with causal triangular masking; "
-        "apply dropout; concatenate heads and project back."
-    )
+    prompt = f"""
+You are analyzing a selected code snippet.
+
+Return exactly two labeled lines in this structure:
+Intent: <one concise sentence describing the function's purpose>
+Logic: <one concise sentence describing the main implementation steps>
+
+Do not add markdown, bullets, headings, or extra text.
+
+Code:
+```python
+{code}
+```
+"""
+    response_text = call_openai(prompt).strip()
+
+    if "Intent:" not in response_text or "Logic:" not in response_text:
+        raise RuntimeError(
+            "OpenAI response for intent did not match the required 'Intent'/'Logic' structure."
+        )
+
+    return response_text
 
 
 def retrieve_context(query_text):
@@ -94,20 +187,29 @@ reflecting the specific mathematical intent and framework versions found in the 
 
 
 def generate_comment_from_code(code_text):
-    # Simplified: reuse your pipeline
+    openai_api_key = get_openai_api_key()
+
     intent = find_intent(code_text)
     ast_tree = ast.parse(code_text)
     ast_str = flatten_ast(ast_tree)
 
     try:
         context = retrieve_context(code_text)
-    except:
+    except Exception:
         context = ["No context found"]
 
     prompt = construct_unified_prompt(code_text, ast_str, context, intent)
 
     # 👉 HERE you would call LLM (replace with real API)
-    generated_comment = "'''Generated docstring based on code'''"
+    generated_comment = call_openai(
+        f"""
+{prompt}
+
+Return only the final generated Python docstring.
+Do not include explanations, markdown fences, or any surrounding text.
+The output must be valid docstring content that can be inserted above the selected code.
+"""
+    ).strip()
 
     return generated_comment
 
@@ -149,7 +251,9 @@ def generate_comment_from_code(code_text):
 #         print("Function not found in target file.")
 
 if __name__ == "__main__":
-    code_input = sys.stdin.read()
-    result = generate_comment_from_code(code_input)
-
-    print(json.dumps({"comment": result}))
+    try:
+        code_input = sys.stdin.read()
+        result = generate_comment_from_code(code_input)
+        print(json.dumps({"comment": result}))
+    except Exception as error:
+        print(json.dumps({"error": str(error)}))
