@@ -44,7 +44,7 @@ def get_openai_api_key():
 def call_openai(prompt):
     api_key = get_openai_api_key()
     request_body = {
-        "model": "gpt-4.1-mini",
+        "model": "gpt-5.4-mini",
         "input": prompt
     }
     request = urllib.request.Request(
@@ -62,33 +62,7 @@ def call_openai(prompt):
 
     return payload["output"][0]["content"][0]["text"]
 
-"""
-Retrieve the source code segment and AST node for a specified function within a given class from a Python source file.
 
-Parameters
-----------
-file_path : str
-    The path to the Python source file to be parsed.
-class_name : str
-    The name of the class containing the target function.
-func_name : str
-    The name of the function whose source code and AST node are to be retrieved.
-
-Returns
--------
-tuple[str or None, ast.FunctionDef or None]
-    A tuple containing:
-    - The source code segment of the specified function as a string,
-      or None if the class or function is not found.
-    - The corresponding `ast.FunctionDef` node of the function,
-      or None if the function is not found.
-
-Notes
------
-This function opens and reads the specified file, parses it into an Abstract Syntax Tree (AST), 
-and traverses the tree to locate the target class and function by their names.
-The source code segment is extracted using `ast.get_source_segment` from the file content.
-"""
 def get_function_source(file_path, class_name, func_name):
     with open(file_path, "r", encoding="utf-8") as f:
         tree = ast.parse(f.read())
@@ -154,6 +128,14 @@ def retrieve_context(query_text):
         n_results=3
     )
     return results['documents'][0]
+    # docs = results["documents"][0]
+    # metas = results["metadatas"][0]
+
+    # return [
+    #     f"[{m.get('source','unknown')}] {d}"
+    #     for d, m in zip(docs, metas)
+    # ]
+
 
 def construct_unified_prompt(code, flattened_ast, rag_context, intent):
     """
@@ -182,6 +164,7 @@ reflecting the specific mathematical intent and framework versions found in the 
 
 ### OUTPUT
 """
+    print(prompt, file=sys.stderr)
     return prompt
 
 
