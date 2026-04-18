@@ -1,6 +1,14 @@
 import * as vscode from 'vscode';
 import { execFile } from 'child_process';
 
+function toDocumentPosition(selectionStart: vscode.Position, relativeLine: number, relativeCharacter: number): vscode.Position {
+    if (relativeLine === 0) {
+        return new vscode.Position(selectionStart.line, selectionStart.character + relativeCharacter);
+    }
+
+    return new vscode.Position(selectionStart.line + relativeLine, relativeCharacter);
+}
+
 export function activate(context: vscode.ExtensionContext) {
 
     let disposable = vscode.commands.registerCommand('extension.generateComment', () => {
@@ -34,13 +42,30 @@ export function activate(context: vscode.ExtensionContext) {
                     return;
                 }
 
-                const comment = result.comment;
+                if (!result.edit || result.edit.type === 'none') {
+                    vscode.window.showInformationMessage(result.message ?? 'Documentation is already adequate.');
+                    return;
+                }
+
                 const workspaceEdit = new vscode.WorkspaceEdit();
-                workspaceEdit.insert(documentUri, insertPosition, comment + "\n");
+                const start = toDocumentPosition(selection.start, result.edit.startLine, result.edit.startCharacter);
+                const end = toDocumentPosition(selection.start, result.edit.endLine, result.edit.endCharacter);
+                const replacementRange = new vscode.Range(start, end);
+
+                if (result.edit.type === 'replace') {
+                    workspaceEdit.replace(documentUri, replacementRange, result.edit.text);
+                } else {
+                    workspaceEdit.insert(documentUri, start, result.edit.text);
+                }
 
                 vscode.workspace.applyEdit(workspaceEdit).then(applied => {
                     if (!applied) {
                         vscode.window.showErrorMessage("Could not insert comment because the file changed or was closed.");
+                        return;
+                    }
+
+                    if (result.message) {
+                        vscode.window.showInformationMessage(result.message);
                     }
                 });
 
