@@ -10,6 +10,7 @@ function toDocumentPosition(selectionStart: vscode.Position, relativeLine: numbe
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    const outputChannel = vscode.window.createOutputChannel('AI Comment Generator');
 
     let disposable = vscode.commands.registerCommand('extension.generateComment', () => {
 
@@ -28,8 +29,15 @@ export function activate(context: vscode.ExtensionContext) {
 
         const pythonPath = "python";
         const scriptPath = vscode.Uri.joinPath(context.extensionUri, 'python', 'comment_generator.py').fsPath;
+        outputChannel.clear();
+        outputChannel.show(true);
+        outputChannel.appendLine('Running comment generator...');
 
         const process = execFile(pythonPath, [scriptPath], (error, stdout, stderr) => {
+            if (stderr) {
+                outputChannel.append(stderr);
+            }
+
             if (error) {
                 vscode.window.showErrorMessage(`Error: ${stderr}`);
                 return;
@@ -39,6 +47,18 @@ export function activate(context: vscode.ExtensionContext) {
                 const result = JSON.parse(stdout);
                 if (result.error) {
                     vscode.window.showErrorMessage(`Error: ${result.error}`);
+                    return;
+                }
+
+                if (!result.edit && result.comment) {
+                    const workspaceEdit = new vscode.WorkspaceEdit();
+                    workspaceEdit.insert(documentUri, selection.start, `${result.comment}\n`);
+
+                    vscode.workspace.applyEdit(workspaceEdit).then(applied => {
+                        if (!applied) {
+                            vscode.window.showErrorMessage("Could not insert comment because the file changed or was closed.");
+                        }
+                    });
                     return;
                 }
 
@@ -79,6 +99,7 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(disposable);
+    context.subscriptions.push(outputChannel);
 }
 
 export function deactivate() { }

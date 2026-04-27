@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import textwrap
+import urllib.error
 import urllib.request
 import warnings
 
@@ -46,34 +47,55 @@ def load_env_file():
                 os.environ[key] = value
 
 
-def get_openai_api_key():
+def get_ollama_base_url():
     load_env_file()
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY environment variable is not set.")
-    return api_key
+    return os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
 
-def call_openai(prompt):
-    api_key = get_openai_api_key()
+def get_ollama_model():
+    load_env_file()
+    return os.environ.get("OLLAMA_MODEL", "phi4-mini")
+
+
+def call_ollama(prompt):
+    base_url = get_ollama_base_url().rstrip("/")
+    model = get_ollama_model()
     request_body = {
-        "model": "gpt-5.4-mini",
-        "input": prompt
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+        "stream": False,
     }
     request = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
+        f"{base_url}/api/chat",
         data=json.dumps(request_body).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         },
         method="POST"
     )
 
-    with urllib.request.urlopen(request) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        error_message = error.reason
+        try:
+            error_payload = json.loads(error.read().decode("utf-8"))
+            error_message = error_payload.get("error", error_message)
+        except Exception:
+            pass
+        raise RuntimeError(f"Ollama request failed: {error_message}") from error
+    except urllib.error.URLError as error:
+        raise RuntimeError(
+            f"Could not reach Ollama at {base_url}. Make sure Ollama is running and the model '{model}' is available."
+        ) from error
 
-    return payload["output"][0]["content"][0]["text"]
+    return payload["message"]["content"]
 
 
 def get_function_source(file_path, class_name, func_name):
@@ -422,12 +444,6 @@ def normalize_docstring_text(text):
     return f'"""{stripped}"""'
 
 
-def print_prompt(label, prompt):
-    print(f"\n===== {label} =====", file=sys.stderr)
-    print(prompt, file=sys.stderr)
-    print(f"===== END {label} =====\n", file=sys.stderr)
-
-
 def indent_block(text, indent, indent_first_line=True):
     lines = text.splitlines()
     if not lines:
@@ -495,12 +511,11 @@ Code:
 {code}
 ```
 """
-    print_prompt("INTENT PROMPT", prompt)
-    response_text = call_openai(prompt).strip()
+    response_text = call_ollama(prompt).strip()
 
     if "Intent:" not in response_text or "Logic:" not in response_text:
         raise RuntimeError(
-            "OpenAI response for intent did not match the required 'Intent'/'Logic' structure."
+            "Ollama response for intent did not match the required 'Intent'/'Logic' structure."
         )
 
     return response_text
@@ -576,19 +591,8 @@ def build_edit_payload(mode, comment_text, documentation_info, insert_position):
     }
 
 
-def parse_selected_code(code_text, label):
-    try:
-        return ast.parse(code_text)
-    except SyntaxError as error:
-        line = error.lineno if error.lineno is not None else "unknown"
-        column = error.offset if error.offset is not None else "unknown"
-        raise RuntimeError(
-            f"The selected {label} is not valid standalone Python (line {line}, column {column}): {error.msg}"
-        ) from error
-
-
 def generate_comment_from_code(code_text):
-    tree = parse_selected_code(code_text, "code block")
+    tree = ast.parse(code_text)
     documentation_info = extract_documentation_info(code_text, tree)
     insert_position = determine_insert_position(code_text, tree)
 
@@ -599,7 +603,7 @@ def generate_comment_from_code(code_text):
         analysis_code = remove_relative_range(code_text, documentation_info["replaceRange"]).strip() or code_text
 
     intent = find_intent(analysis_code)
-    ast_tree = parse_selected_code(analysis_code, "code block after removing existing documentation")
+    ast_tree = ast.parse(analysis_code)
     ast_str = flatten_ast(ast_tree)
 
     try:
@@ -626,7 +630,8 @@ def generate_comment_from_code(code_text):
 
     prompt = construct_unified_prompt(analysis_code, ast_str, context, intent)
     mode_prompt = build_mode_specific_prompt(classification["mode"], existing_comment)
-    final_prompt = f"""
+    raw_docstring = call_ollama(
+        f"""
 {prompt}
 
 {mode_prompt}
@@ -635,8 +640,7 @@ Return only the final generated Python docstring.
 Do not include explanations, markdown fences, or any surrounding text.
 The output must be valid docstring content that can be inserted into the selected code block.
 """
-    print_prompt("GENERATION PROMPT", final_prompt)
-    raw_docstring = call_openai(final_prompt).strip()
+    ).strip()
 
     normalized_docstring = normalize_docstring_text(raw_docstring)
     indent = documentation_info["indent"] if documentation_info else insert_position["indent"]

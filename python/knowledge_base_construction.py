@@ -99,34 +99,7 @@ def scrape_github_artifacts(owner, repo):
 
 def extract_pypi_docs(package, version):
   
-    """Extract the PyPI project description for a specific package version.
-    
-    This function builds the canonical PyPI project URL for ``package`` and
-    ``version``, downloads the corresponding project page, and parses the HTML
-    to locate the element with ``id="description"``. If found, the description
-    text is returned as a single artifact dictionary in a list.
-    
-    Parameters
-    ----------
-    package : str
-        Name of the PyPI package.
-    version : str
-        Version string of the PyPI release to fetch.
-    
-    Returns
-    -------
-    list of dict
-        A list containing zero or one artifact dictionaries. Each artifact has
-        the keys ``"content"`` and ``"source"``. The list is empty if the page
-        cannot be retrieved or no description element is present.
-    
-    Notes
-    -----
-    This routine relies on the standard PyPI project page layout and uses
-    ``requests`` for HTTP retrieval and ``BeautifulSoup`` from ``bs4`` for HTML
-    parsing. It is designed to extract documentation text from the package's
-    published PyPI page, not from local source distributions or Sphinx builds.
-    """
+
     print(f"Extracting PyPI docs for {package} v{version}...")
     url = f"https://pypi.org/project/{package}/{version}/"
     artifacts = []
@@ -145,38 +118,7 @@ def extract_pypi_docs(package, version):
     return artifacts
 
 def build_vector_db(artifacts):
-        """Build a persistent ChromaDB vector store from artifact contents.
-    
-    Initializes a persistent ChromaDB client and a ``repo_context`` collection,
-    loads the configured SentenceTransformer embedding model, and splits each
-    artifact's ``content`` field into overlapping character chunks. Each chunk is
-    paired with the originating artifact's ``source`` metadata and a unique
-    incremental ID, preparing the data for later embedding and insertion into the
-    vector database. If no chunks are produced, the function exits early.
-    
-    Parameters
-    ----------
-    artifacts : list of dict
-        Artifact records to index. Each record must provide:
-    
-        - ``content`` : str
-            Text to be chunked and embedded.
-        - ``source`` : str
-            Source identifier stored as chunk metadata.
-    
-    Notes
-    -----
-    This function is part of a retrieval-oriented preprocessing pipeline for
-    building repository context. It uses ChromaDB's persistent client API and a
-    SentenceTransformer embedding model, with chunking performed by
-    ``CharacterTextSplitter(chunk_size=500, chunk_overlap=50)``.
-    
-    See Also
-    --------
-    chromadb.PersistentClient : Persistent vector database client.
-    SentenceTransformer : Sentence embedding model loader.
-    CharacterTextSplitter : Text splitter for overlapping chunk generation.
-    """
+
     print("Initializing ChromaDB...")
     client = chromadb.PersistentClient(path=DB_PATH)
     collection = client.get_or_create_collection(name="repo_context")
