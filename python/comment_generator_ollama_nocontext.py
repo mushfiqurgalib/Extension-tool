@@ -1,6 +1,8 @@
 import json
 import os
+import re
 import sys
+import textwrap
 import urllib.error
 import urllib.request
 
@@ -73,6 +75,37 @@ def call_ollama(prompt):
     return payload["message"]["content"]
 
 
+def strip_markdown_fences(text):
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return stripped
+
+
+def extract_docstring_block(text):
+    match = re.search(r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\')', text)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def normalize_docstring_text(text):
+    stripped = textwrap.dedent(strip_markdown_fences(text)).strip()
+    extracted_docstring = extract_docstring_block(stripped)
+    if extracted_docstring:
+        return extracted_docstring
+    if stripped.startswith('"""') or stripped.startswith("'''"):
+        return stripped
+    if "\n" in stripped:
+        return f'"""\n{stripped}\n"""'
+    return f'"""{stripped}"""'
+
+
 def build_prompt(code_text):
     return f"""
 ### RAW LEXICAL CODE
@@ -86,6 +119,9 @@ reflecting the specific mathematical intent and framework versions found in the 
 
 ### OUTPUT
 Return only the final Python docstring.
+Do not repeat the function signature, decorator, class header, or any code line.
+Do not wrap the docstring in another quoted string.
+The response must start with triple quotes and end with triple quotes.
 Do not include explanations, markdown fences, or any surrounding text.
 """
 
@@ -95,7 +131,8 @@ def generate_comment_from_code(code_text):
     print("\n===== OLLAMA NO-CONTEXT PROMPT =====", file=sys.stderr)
     print(prompt, file=sys.stderr)
     print("===== END OLLAMA NO-CONTEXT PROMPT =====\n", file=sys.stderr)
-    return call_ollama(prompt).strip()
+    raw_comment = call_ollama(prompt).strip()
+    return normalize_docstring_text(raw_comment)
 
 
 if __name__ == "__main__":

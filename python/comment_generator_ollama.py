@@ -435,8 +435,18 @@ def strip_markdown_fences(text):
     return stripped
 
 
+def extract_docstring_block(text):
+    match = re.search(r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\')', text)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
 def normalize_docstring_text(text):
     stripped = textwrap.dedent(strip_markdown_fences(text)).strip()
+    extracted_docstring = extract_docstring_block(stripped)
+    if extracted_docstring:
+        return extracted_docstring
     if stripped.startswith('"""') or stripped.startswith("'''"):
         return stripped
     if "\n" in stripped:
@@ -637,6 +647,9 @@ def generate_comment_from_code(code_text):
 {mode_prompt}
 
 Return only the final generated Python docstring.
+Do not repeat the function signature, decorator, class header, or any code line.
+Do not wrap the docstring in another quoted string.
+The response must start with triple quotes and end with triple quotes.
 Do not include explanations, markdown fences, or any surrounding text.
 The output must be valid docstring content that can be inserted into the selected code block.
 """

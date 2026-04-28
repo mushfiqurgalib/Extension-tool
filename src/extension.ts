@@ -9,6 +9,14 @@ function toDocumentPosition(selectionStart: vscode.Position, relativeLine: numbe
     return new vscode.Position(selectionStart.line + relativeLine, relativeCharacter);
 }
 
+function indentPlainComment(comment: string, indentLevel: number): string {
+    const indent = ' '.repeat(indentLevel);
+    return comment
+        .split('\n')
+        .map(line => line.length > 0 ? `${indent}${line}` : indent)
+        .join('\n');
+}
+
 export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('AI Comment Generator');
 
@@ -28,7 +36,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         const pythonPath = "python";
-        const scriptPath = vscode.Uri.joinPath(context.extensionUri, 'python', 'comment_generator.py').fsPath;
+        const scriptPath = vscode.Uri.joinPath(context.extensionUri, 'python', 'comment_generator_ollama.py').fsPath;
         outputChannel.clear();
         outputChannel.show(true);
         outputChannel.appendLine('Running comment generator...');
@@ -52,7 +60,9 @@ export function activate(context: vscode.ExtensionContext) {
 
                 if (!result.edit && result.comment) {
                     const workspaceEdit = new vscode.WorkspaceEdit();
-                    workspaceEdit.insert(documentUri, selection.start, `${result.comment}\n`);
+                    const insertionStart = new vscode.Position(selection.start.line, 0);
+                    const formattedComment = indentPlainComment(result.comment, selection.start.character);
+                    workspaceEdit.insert(documentUri, insertionStart, `${formattedComment}\n`);
 
                     vscode.workspace.applyEdit(workspaceEdit).then(applied => {
                         if (!applied) {
