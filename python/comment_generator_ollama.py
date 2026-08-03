@@ -20,6 +20,51 @@ DB_PATH = os.path.join(BASE_DIR, "chroma_db")
 EMBED_MODEL = "all-MiniLM-L6-v2"
 TARGET_FILE = os.path.join(BASE_DIR, "minGPT", "mingpt", "model.py")
 
+ABLATION_PROFILES = {
+    "phi_only": {
+        "label": "Phi only",
+        "use_ast": False,
+        "use_intent": False,
+        "context_sources": [],
+    },
+    "phi_ast": {
+        "label": "Phi + AST",
+        "use_ast": True,
+        "use_intent": False,
+        "context_sources": [],
+    },
+    "phi_ast_intent": {
+        "label": "Phi + AST + Intent",
+        "use_ast": True,
+        "use_intent": True,
+        "context_sources": [],
+    },
+    "phi_ast_intent_repository": {
+        "label": "Phi + AST + Intent + Repository",
+        "use_ast": True,
+        "use_intent": True,
+        "context_sources": ["repository"],
+    },
+    "phi_ast_intent_external_docs": {
+        "label": "Phi + AST + Intent + External Docs",
+        "use_ast": True,
+        "use_intent": True,
+        "context_sources": ["external_docs"],
+    },
+    "phi_ast_intent_repository_external_docs": {
+        "label": "Phi + AST + Intent + Repository + External Docs",
+        "use_ast": True,
+        "use_intent": True,
+        "context_sources": ["repository", "external_docs"],
+    },
+    "full_rag": {
+        "label": "Full RAG",
+        "use_ast": True,
+        "use_intent": True,
+        "context_sources": ["repository", "external_docs"],
+    },
+}
+
 STOPWORDS = {
     "the", "and", "for", "with", "this", "that", "from", "into", "when", "where",
     "which", "while", "will", "have", "has", "been", "are", "was", "were", "than",
@@ -402,7 +447,7 @@ def classify_comment_state(existing_comment, code_text, intent):
         }
 
     if (
-        readability["word_count"] < 12
+        readability["word_count"] < 20
         or readability["flesch_reading_ease"] < 30
         or readability["gunning_fog_index"] > 18
     ):
@@ -531,10 +576,35 @@ Code:
     return response_text
 
 
-def retrieve_context(query_text):
+def normalize_ablation_profile(ablation_profile):
+    if ablation_profile is None:
+        return ABLATION_PROFILES["full_rag"]
+
+    if isinstance(ablation_profile, str):
+        if ablation_profile not in ABLATION_PROFILES:
+            available_profiles = ", ".join(sorted(ABLATION_PROFILES))
+            raise ValueError(f"Unknown ablation profile '{ablation_profile}'. Available profiles: {available_profiles}")
+        return ABLATION_PROFILES[ablation_profile]
+
+    return ablation_profile
+
+
+def source_matches_context(source, context_sources):
+    source = source or ""
+    if "repository" in context_sources:
+        if source.startswith("README") or source.startswith("Issue/PR"):
+            return True
+    if "external_docs" in context_sources:
+        if source.startswith("PyPI"):
+            return True
+    return False
+
+
+def retrieve_context(query_text, context_sources=None, k=3):
     """
     Phase 2 & 4: Query the Vector Database for documentation context.
     """
+    context_sources = context_sources or ["repository", "external_docs"]
     print("Connecting to ChromaDB...", file=sys.stderr)
     client = chromadb.PersistentClient(path=DB_PATH)
     collection = client.get_collection(name="repo_context")
@@ -545,15 +615,68 @@ def retrieve_context(query_text):
     query_embed = model.encode([query_text]).tolist()
     results = collection.query(
         query_embeddings=query_embed,
-        n_results=3
+        n_results=12,
+        include=["documents", "metadatas"],
     )
-    return results["documents"][0]
+
+    filtered_documents = []
+    for document, metadata in zip(results["documents"][0], results["metadatas"][0]):
+        if source_matches_context(metadata.get("source"), context_sources):
+            filtered_documents.append(document)
+        if len(filtered_documents) == k:
+            break
+
+    return filtered_documents
 
 
-def construct_unified_prompt(code, flattened_ast, rag_context, intent):
+def construct_unified_prompt(code, flattened_ast=None, rag_context=None, intent=None, profile_label="Full RAG"):
     """
     Phase 4: Construct the prompt for the Generation model.
     """
+    sections = [
+        "## TARGET FUNCTION GENERATION PROMPT",
+        f"## ABLATION PROFILE: {profile_label}",
+        "",
+        "### 1. RAW LEXICAL CODE",
+        "```python",
+        code,
+        "```",
+    ]
+
+    if flattened_ast:
+        sections.extend([
+            "",
+            "### 2. FLATTENED AST STRING",
+            flattened_ast,
+        ])
+
+    if rag_context:
+        sections.extend([
+            "",
+            "### 3. RETRIEVED RAG CONTEXT",
+            "\n".join(["- " + context_item for context_item in rag_context]),
+        ])
+
+    if intent:
+        sections.extend([
+            "",
+            "### 4. DISCOVERED INTENT",
+            intent,
+        ])
+
+    sections.extend([
+        "",
+        "### TASK",
+        "Generate a highly accurate, professional NumPy-style docstring comment for the function above.",
+        "Use only the evidence included in this ablation profile.",
+        "",
+        "### OUTPUT",
+    ])
+
+    return "\n".join(sections)
+
+
+def construct_legacy_unified_prompt(code, flattened_ast, rag_context, intent):
     return f"""
 ## TARGET FUNCTION GENERATION PROMPT
 
@@ -601,7 +724,8 @@ def build_edit_payload(mode, comment_text, documentation_info, insert_position):
     }
 
 
-def generate_comment_from_code(code_text):
+def generate_comment_from_code(code_text, ablation_profile=None, k=3):
+    profile = normalize_ablation_profile(ablation_profile)
     tree = ast.parse(code_text)
     documentation_info = extract_documentation_info(code_text, tree)
     insert_position = determine_insert_position(code_text, tree)
@@ -612,19 +736,29 @@ def generate_comment_from_code(code_text):
         existing_comment = documentation_info["text"]
         analysis_code = remove_relative_range(code_text, documentation_info["replaceRange"]).strip() or code_text
 
-    intent = find_intent(analysis_code)
-    ast_tree = ast.parse(analysis_code)
-    ast_str = flatten_ast(ast_tree)
+    intent = ""
+    if profile["use_intent"]:
+        intent = find_intent(analysis_code)
 
-    try:
-        context = retrieve_context(analysis_code)
-    except Exception:
-        context = ["No context found"]
+    ast_str = ""
+    if profile["use_ast"]:
+        ast_tree = ast.parse(analysis_code)
+        ast_str = flatten_ast(ast_tree)
 
-    classification = classify_comment_state(existing_comment, analysis_code, intent)
+    context = []
+    if profile["context_sources"]:
+        try:
+            context = retrieve_context(analysis_code, profile["context_sources"], k=k)
+        except Exception:
+            context = ["No context found"]
+        if not context:
+            context = ["No context found for selected ablation sources."]
+
+    classification = classify_comment_state(existing_comment, analysis_code, intent or analysis_code)
 
     if classification["mode"] == "retain":
         return {
+            "ablation_profile": profile["label"],
             "mode": "retain",
             "message": classification["reason"],
             "comment": existing_comment,
@@ -638,7 +772,13 @@ def generate_comment_from_code(code_text):
             },
         }
 
-    prompt = construct_unified_prompt(analysis_code, ast_str, context, intent)
+    prompt = construct_unified_prompt(
+        analysis_code,
+        flattened_ast=ast_str,
+        rag_context=context,
+        intent=intent,
+        profile_label=profile["label"],
+    )
     mode_prompt = build_mode_specific_prompt(classification["mode"], existing_comment)
     raw_docstring = call_ollama(
         f"""
@@ -665,6 +805,7 @@ The output must be valid docstring content that can be inserted into the selecte
     edit = build_edit_payload(classification["mode"], formatted_docstring, documentation_info, insert_position)
 
     return {
+        "ablation_profile": profile["label"],
         "mode": classification["mode"],
         "message": classification["reason"],
         "comment": formatted_docstring,
