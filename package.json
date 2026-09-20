@@ -1,7 +1,8 @@
 {
-  "name": "ts",
-  "displayName": "ts",
-  "description": "",
+  "name": "IntentDoc",
+  "displayName": "IntentDoc",
+  "description": "Code Intent Docstring Generator",
+  "publisher": "MushfiqurRahman",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.107.0"
@@ -29,7 +30,7 @@
     "test": "echo \"No tests configured\""
   },
   "devDependencies": {
-    "@types/vscode": "^1.110.0",
+    "@types/vscode": "^1.107.0",
     "@types/mocha": "^10.0.10",
     "@types/assert": "^1.5.11",
     "eslint": "^9.39.3",
