@@ -475,6 +475,76 @@ Existing documentation:
 """
 
 
+def parse_intent_response(response_text):
+    """
+    Parses and normalizes LLM intent response into structured Intent and Logic format.
+    Handles variations in markdown tags (**Intent:**, ### Intent, bullets, casing, etc.)
+    and provides a fallback if strict labels are missing.
+    """
+    if not response_text:
+        return "Intent: Analyze function behavior.\nLogic: Execute function implementation."
+
+    cleaned_text = response_text.strip()
+
+    # Try regex matching for Intent and Logic lines (case-insensitive, handling markdown bolding/bullets/headers)
+    intent_match = re.search(
+        r'(?:(?:\*{1,3}|#{1,6}|[\-\*])\s*)?(?:Intent|Purpose|Summary)\s*(?:\*{1,3})?\s*:\s*(.+)',
+        cleaned_text,
+        re.IGNORECASE
+    )
+    logic_match = re.search(
+        r'(?:(?:\*{1,3}|#{1,6}|[\-\*])\s*)?(?:Logic|Implementation|Steps|Details)\s*(?:\*{1,3})?\s*:\s*(.+)',
+        cleaned_text,
+        re.IGNORECASE
+    )
+
+    if intent_match and logic_match:
+        intent_str = intent_match.group(1).strip().strip('*_` \t')
+        logic_str = logic_match.group(1).strip().strip('*_` \t')
+        return f"Intent: {intent_str}\nLogic: {logic_str}"
+
+    lines = []
+    for raw_line in cleaned_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Remove header/bullet indicators like `### `, `- `, `* `, `1. `
+        line = re.sub(r'^(?:[\-\*\d\.]+\s*|#{1,6}\s*)', '', line).strip()
+        # Clean markdown bold around intent/logic labels
+        line = re.sub(r'^\*\*(Intent|Logic|Purpose|Implementation|Steps|Summary)\*\*:?', r'\1:', line, flags=re.IGNORECASE)
+        lines.append(line)
+
+    if not lines:
+        return "Intent: Analyze function behavior.\nLogic: Execute function implementation."
+
+    intent_line = None
+    logic_line = None
+    for line in lines:
+        if not intent_line and re.match(r'^(?:Intent|Purpose|Summary)\s*:', line, re.IGNORECASE):
+            val = re.sub(r'^(?:Intent|Purpose|Summary)\s*:\s*', '', line, flags=re.IGNORECASE).strip()
+            intent_line = f"Intent: {val}"
+        elif not logic_line and re.match(r'^(?:Logic|Implementation|Steps|Details)\s*:', line, re.IGNORECASE):
+            val = re.sub(r'^(?:Logic|Implementation|Steps|Details)\s*:\s*', '', line, flags=re.IGNORECASE).strip()
+            logic_line = f"Logic: {val}"
+
+    if intent_line and logic_line:
+        return f"{intent_line}\n{logic_line}"
+
+    if intent_line and not logic_line:
+        other_lines = [l for l in lines if not re.match(r'^(?:Intent|Purpose|Summary)\s*:', l, re.IGNORECASE)]
+        logic_str = " ".join(other_lines) if other_lines else "Execute steps defined in function body."
+        return f"{intent_line}\nLogic: {logic_str}"
+
+    if logic_line and not intent_line:
+        other_lines = [l for l in lines if not re.match(r'^(?:Logic|Implementation|Steps|Details)\s*:', l, re.IGNORECASE)]
+        intent_str = " ".join(other_lines) if other_lines else "Perform function operations."
+        return f"Intent: {intent_str}\n{logic_line}"
+
+    intent_str = lines[0]
+    logic_str = " ".join(lines[1:]) if len(lines) > 1 else intent_str
+    return f"Intent: {intent_str}\nLogic: {logic_str}"
+
+
 def find_intent(code):
     """
     Phase 3: Internal Context Retrieval.
@@ -497,13 +567,7 @@ Code:
 """
     print_prompt("INTENT PROMPT", prompt)
     response_text = call_openai(prompt).strip()
-
-    if "Intent:" not in response_text or "Logic:" not in response_text:
-        raise RuntimeError(
-            "OpenAI response for intent did not match the required 'Intent'/'Logic' structure."
-        )
-
-    return response_text
+    return parse_intent_response(response_text)
 
 
 def retrieve_context(query_text):

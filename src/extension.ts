@@ -47,14 +47,16 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             if (error) {
-                vscode.window.showErrorMessage(`Error: ${stderr}`);
+                const errorMsg = stderr.trim().startsWith('Error:') ? stderr.trim() : `Error: ${stderr.trim()}`;
+                vscode.window.showErrorMessage(errorMsg);
                 return;
             }
 
             try {
                 const result = JSON.parse(stdout);
                 if (result.error) {
-                    vscode.window.showErrorMessage(`Error: ${result.error}`);
+                    const errorMsg = result.error.trim().startsWith('Error:') ? result.error.trim() : `Error: ${result.error.trim()}`;
+                    vscode.window.showErrorMessage(errorMsg);
                     return;
                 }
 
